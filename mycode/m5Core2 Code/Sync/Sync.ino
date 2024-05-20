@@ -1,8 +1,10 @@
+#include "M5Core2.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <M5GFX.h>
 #include <Arduino_JSON.h>
 #include <assert.h>
+#include <string.h>
 
 M5GFX display;
 
@@ -21,6 +23,16 @@ int frame_num = 0;
 int frame_length = 1000;
 int displayNum = 1;
 unsigned long time_offset = 0;
+int accel_send = 0;
+int gyro_send = 0; 
+
+float accX = 0;
+float accY = 0;
+float accZ = 0;
+
+float gyroX = 0;
+float gyroY = 0;
+float gyroZ = 0;
 
 //image_names
 extern const unsigned char image1[];
@@ -50,6 +62,15 @@ void setup() {
 
     Serial.begin(9600);
 
+    //screen display initalise
+    display.begin();
+    if (display.width() < display.height())
+    {
+      display.setRotation(display.getRotation() ^ 1);
+    }
+
+    // selectDisplayNum();
+
     unsigned long now = millis();  // Obtain the startup duration.
 
     //time synconsiation to dispaly 1
@@ -70,13 +91,8 @@ void setup() {
       }
       display.clear();
     }
-
-    //screen display initalise
-    display.begin();
-    if (display.width() < display.height())
-    {
-      display.setRotation(display.getRotation() ^ 1);
-    }
+    
+    M5.IMU.Init();
 
 }
 
@@ -177,16 +193,58 @@ void loop() {
       display.setTextDatum(textdatum_t::top_left);
       display.drawString("new frame", 0, 0);
 
-      // snprintf(msg, MSG_BUFFER_SIZE, "{\"type\": 0 , \"category \": 0 , \"ID \": 1 , \"offset\": %lu} ",
-      //          3210);  // Format Of string for time sychronisation.
-      // // display.print("Publish message: ");
-      // // display.println(msg);
-      // client.publish("un46986700/computer", msg);  // Publishes a message to the specified topic.
+      if(accel_send){
+        JSONVar accel_message;
+        JSONVar accel_xyz;
+
+        accel_message["type"] = 0;
+        accel_message["category"] = 3;
+        accel_message["ID"] = displayNum;
+        M5.IMU.getAccelData(&accX, &accY, &accZ);
+        accel_xyz[0] = accX;
+        accel_xyz[1] = accY;
+        accel_xyz[2] = accZ;
+        accel_message["accel"] = accel_xyz;
+        client.publish("un46986700/computer", JSON.stringify(accel_message).c_str());  // Publishes a message to the specified topic.
+      }
+
+      if(gyro_send){
+        JSONVar gyro_message;
+        JSONVar gyro_xyz;
+
+        gyro_message["type"] = 0;
+        gyro_message["category"] = 4;
+        gyro_message["ID"] = displayNum;
+        M5.IMU.getGyroData(&gyroX, &gyroY, &gyroZ);
+        gyro_xyz[0] = gyroX;
+        gyro_xyz[1] = gyroY;
+        gyro_xyz[2] = gyroZ;
+        gyro_message["gyro"] = gyro_xyz;
+        client.publish("un46986700/computer", JSON.stringify(gyro_message).c_str());  // Publishes a message to the specified topic.
+      }
+
     }
+
+    //check for shake
+    M5.IMU.getAccelData(&accX, &accY, &accZ);
+    if (accX > 80 || accY > 80 || accZ > 80) {
+      M5.Axp.SetVibration(true);  // Open the vibration.
+      delay(100);
+      M5.Axp.SetVibration(false);
+    }
+
+    M5.IMU.getGyroData(&gyroX, &gyroY, &gyroZ);
+    if (accX > 100 || accY > 100 || accZ > 100) {
+      M5.Axp.SetVibration(true);  // Open the vibration.
+      delay(100);
+      M5.Axp.SetVibration(false);
+    }
+
 }
 
 void setupWifi() {
     delay(10);
+    display.fillScreen(RED);
     display.printf("Connecting to %s", ssid);
     WiFi.mode(
         WIFI_STA);  // Set the mode to WiFi station mode.  
@@ -196,26 +254,58 @@ void setupWifi() {
         delay(500);
         display.print(".");
     }
-    display.printf("\nSuccess\n");
+    display.fillScreen(WHITE);
 }
 
 void selectDisplayNum(){
-
+  display.clearDisplay();
+  
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      display.fillSmoothRoundRect(
+        (display.width()/20 + i*display.width()/3)
+        , (display.height()/20 + j*display.height()/3)
+        , display.width()/3.5
+        , display.height()/4
+        , 10
+        , BLUE
+      );
+    }
+  }
+  while(displayNum == 0){
+    M5.update();
+    display.setCursor(0,0);
+    if(!M5.Touch.ispressed()) {
+      continue;
+    }
+    TouchPoint_t coordinate;
+    coordinate = M5.Touch.getPressPoint();
+    snprintf(msg, MSG_BUFFER_SIZE, "X: %d Y:%d",
+                 coordinate.x, coordinate.y);  // Format of string for time sychronisation.
+    display.print(msg);
+    if(coordinate.x < 0 || coordinate.y < 0){
+      continue;
+    }
+    i = (int) coordinate.x/ (display.width()/3);
+    j = (int) coordinate.y/ (display.width()/3);
+    displayNum = ((int) coordinate.x/ (display.width()/3)) + 3*((int) coordinate.y/ (display.width()/3)) + 1;
+  }
+  display.setCursor(0,0);
+  snprintf(msg, MSG_BUFFER_SIZE, "Selected Num %d",
+                 displayNum);  // Format of string for time sychronisation.
+  display.println(msg);
+  delay(3000);
+  
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
     unsigned long arrived = millis();  // Obtain the host startup duration.
-    display.print("Message arrived [");
-    display.print(topic);
-    display.print("] ");
     char input[length];
     for (int i = 0; i < length; i++) {
-        display.print((char)payload[i]);
         input[i] = (char)payload[i];
     }
-    display.println();
 
-    if(topic == "un46986700/sync"){
+    if(strcmp(topic,"un46986700/sync") == 0){
       JSONVar message = JSON.parse(input);
       if (!message.hasOwnProperty("type")){
         return;
@@ -237,7 +327,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
         unsigned long trans_delay = ((arrived - (unsigned long) timestamps[0]) - ( (unsigned long) timestamps[2] - (unsigned long) timestamps[1]))/2;
         time_offset = (unsigned long) timestamps[1] - trans_delay - (unsigned long) timestamps[0];
       }
+    }else if(strcmp(topic,"un46986700/toggle") == 0){
+      JSONVar message = JSON.parse(input);
+      if (!message.hasOwnProperty("toggle")){
+        return;
+      }
+      if ((int) message["toggle"] == displayNum){
+        gyro_send = !gyro_send;
+        accel_send = !accel_send;
+      }
     }
+    
 
 }
 
@@ -251,10 +351,8 @@ void reConnect() {
         if (client.connect(clientId.c_str())) {
             display.printf("\nSuccess\n");
             // Once connected, publish an announcement to the topic.
-            // 一旦连接，发送一条消息至指定话题
-            client.publish("M5Stack", "hello world");
             // ... and resubscribe.  重新订阅话题
-            client.subscribe("M5Stack");
+            client.subscribe("un46986700/#");
         } else {
             display.print("failed, rc=");
             display.print(client.state());
